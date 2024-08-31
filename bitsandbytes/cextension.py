@@ -113,10 +113,6 @@ def get_native_library() -> BNBNativeLibrary:
                        "This version may become unstable unexpectedly.")
         return BNBNativeLibrary(dll)
 
-    logger.warning(
-        "The installed version of bitsandbytes was compiled without GPU support. "
-        "8-bit optimizers, 8-bit multiplication, and GPU quantization are unavailable.",
-    )
     return BNBNativeLibrary(dll)
 
 
