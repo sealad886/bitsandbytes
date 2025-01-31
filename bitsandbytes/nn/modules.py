@@ -20,6 +20,7 @@ from bitsandbytes.utils import (
     LINEAR_8BIT_WEIGHTS_FORMAT_MAPPING,
     OutlierTracer,
     enable_ipex_fusion,
+    reverse_4bit_compress_format,
 )
 
 T = TypeVar("T", bound="torch.nn.Module")
@@ -460,9 +461,9 @@ class Linear4bit(nn.Linear):
                 original_weight = torch.ops.ipex_prepack.woq_linear_unpack_weight(
                     self.weight, "nf4", self.weight.quant_state.shape, 2
                 )
-                self.weight.data = original_weight.data
+                self.weight.data = reverse_4bit_compress_format(original_weight.data)
             elif self.weight.device.type == "xpu":
-                self.weight.data = self.weight.data.reshape(1, -1)
+                self.weight.data = reverse_4bit_compress_format(self.weight.data.reshape(1, -1))
 
             self.weight.quant_state.ipex = False
 
@@ -659,9 +660,9 @@ class Int8Params(torch.nn.Parameter):
         self.SCB = SCB
         return self
 
-    def xpu(self):
+    def xpu(self, device):
         # we store the 8-bit rows-major weight
-        B = self.data.contiguous().to(torch.float16).xpu()
+        B = self.data.contiguous().to(torch.float16).xpu(device)
         CB, CBt, SCB, SCBt, coo_tensorB = bnb.functional.double_quant(B)
         if CBt is not None:
             del CBt
@@ -699,11 +700,11 @@ class Int8Params(torch.nn.Parameter):
                 return self.cpu()
         elif device.type == "xpu":
             if self.data.dtype == torch.int8:
-                self.data = self.data.contiguous().xpu()
+                self.data = self.data.contiguous().xpu(device)
                 self.CB = self.data
                 return self
             else:
-                return self.xpu()
+                return self.xpu(device)
         else:
             new_param = Int8Params(
                 super().to(device=device, dtype=dtype, non_blocking=non_blocking),
