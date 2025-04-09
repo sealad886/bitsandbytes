@@ -194,8 +194,10 @@ def int8_linear_matmul_impl(
 
     A_reshaped = A.reshape(m, k)
 
-    # torch._int_mm is available on CPU since torch 2.4
-    if _torch_version_prereq(2, 4) and A.device.type == "cpu":
+    # torch._int_mm is available on CPU since torch 2.4, XPU since torch 2.6
+    if (A.device.type == "cpu" and _torch_version_prereq(2, 4)) or (
+        A.device.type == "xpu" and _torch_version_prereq(2, 6)
+    ):
         C = torch._int_mm(A_reshaped, B.T).to(dtype)
     else:
         C = torch.matmul(A_reshaped.float(), B.t().float()).to(dtype)
@@ -296,6 +298,7 @@ def quantize_4bit_impl(
     blocksize=64,
     compress_statistics=False,
     quant_type="nf4",
+    quant_storage=torch.uint8,
 ) -> Tensor:
     """
     Quantize tensor A in blocks of 4-bit values.
@@ -314,6 +317,8 @@ def quantize_4bit_impl(
         The blocksize used in quantization.
     quant_type : str
         The 4-bit quantization data type {fp4, nf4}, only nf4 is supported now
+    quant_storage: torch.dtype
+        We can use bytes to convert storage type.
 
     Returns
     -------
@@ -364,8 +369,9 @@ def quantize_4bit_impl(
             out_uint8[abs_scaled_A > key] = val
         out_uint8 += sign.to(torch.uint8) * 8
     elif quant_type == "int8":
-        for i in range(len(INT8_QUANT_TABLE)):
-            out_uint8[scaled_A > INT8_QUANT_TABLE[i]] = i
+        map = torch.tensor(INT8_QUANT_TABLE, device=scaled_A.device)
+        diff = torch.abs(scaled_A.unsqueeze(-1) - map)
+        out_uint8 = torch.argmin(diff, dim=-1).to(torch.uint8).to(scaled_A.device)
 
     if quant_type == "int8":
         out = out_uint8
@@ -401,6 +407,10 @@ def quantize_4bit_impl(
             quant_type=quant_type,
         )
 
+    if quant_storage != torch.uint8:
+        bytes_value = out.cpu().numpy().tobytes()
+        out = torch.frombuffer(bytes_value, dtype=quant_storage).to(A.device)
+
     return out.reshape(-1, 1), state
 
 
@@ -418,7 +428,8 @@ def dequant_8bit(A, offset, quant_state):
     return absmax
 
 
-@_maybe_torch_compile
+# Compile will fail in torch.frombuffer
+# @_maybe_torch_compile
 def dequantize_4bit_impl(
     A: Tensor,
     quant_state=None,
@@ -428,8 +439,7 @@ def dequantize_4bit_impl(
     quant_type="nf4",
 ) -> Tensor:
     """
-    Dequantizes FP4 blockwise quantized values.
-
+    Dequantizes 4-bit blockwise quantized values.
     Dequantizes the tensor A with maximum absolute values absmax in blocks of size blocksize.
 
     Parameters
@@ -445,8 +455,7 @@ def dequantize_4bit_impl(
     blocksize : int
         The blocksize used in quantization.
     quant_type : str
-        The 4-bit quantization data type {fp4, nf4}, only nf4 is supported now
-
+        The 4-bit quantization data type {fp4, nf4}
 
     Returns
     -------
@@ -455,6 +464,10 @@ def dequantize_4bit_impl(
     """
     transpose = True if A.shape[0] == 1 else False
     A = A.reshape(-1)
+    device = A.device
+    if A.dtype != torch.uint8:
+        bytes_value = A.cpu().numpy().tobytes()
+        A = torch.frombuffer(bytes_value, dtype=torch.uint8).to(device)
 
     if quant_state is None:
         assert absmax is not None and out is not None
