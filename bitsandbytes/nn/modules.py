@@ -345,7 +345,7 @@ class Params4bit(torch.nn.Parameter):
     def to(self, *args, **kwargs):
         device, dtype, non_blocking, convert_to_format = torch._C._nn._parse_to(*args, **kwargs)
 
-        if device is not None and device.type in ["cuda", "cpu", "npu", "xpu"] and not self.bnb_quantized:
+        if device is not None and device.type in ["cuda", "cpu", "npu", "xpu", "hpu"] and not self.bnb_quantized:
             return self._quantize(device)
         else:
             if self.quant_state is not None:
@@ -447,7 +447,7 @@ class Linear4bit(nn.Linear):
         )
         # self.persistent_buffers = []  # TODO consider as way to save quant state
         self.compute_dtype = compute_dtype
-        self.compute_type_is_set = False
+        self.compute_type_is_set = False if compute_dtype is None else True
         self.ipex_linear_is_set = False
         self.quant_state = None
         self.quant_storage = quant_storage
